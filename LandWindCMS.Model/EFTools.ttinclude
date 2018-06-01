@@ -1,0 +1,314 @@
+﻿<#@ template language="C#v4.5" hostspecific="True" #>
+<#@ assembly name="EnvDTE" #>
+<#@ assembly name="System.Data" #>
+<#@ assembly name="System.Xml" #>
+<#@ assembly name="System.Configuration" #>
+<#@ assembly name="System.Windows.Forms" #>
+<#@ import namespace="System.Collections.Generic" #>
+<#@ import namespace="System.Data" #>
+<#@ import namespace="System.Data.SqlClient" #>
+<#@ import namespace="System.Data.Common" #>
+<#@ import namespace="System.Diagnostics" #>
+<#@ import namespace="System.Globalization" #>
+<#@ import namespace="System.IO" #>
+<#@ import namespace="System.Linq" #>
+<#@ import namespace="System.Text" #>
+<#@ import namespace="System.Text.RegularExpressions" #>
+<#@ import namespace="System.Configuration" #>
+<#@ import namespace="System.Windows.Forms" #>
+<#+
+
+string ConnectionStringName = "AirMasterDBConnStr";
+string Namespace = "";
+string RepoName = "";
+string ClassPrefix = "";
+string ClassSuffix = "";
+string SchemaName = null;
+bool IncludeViews = false;
+bool GenerateOperations = false;
+bool GenerateCommon = true;
+bool GeneratePocos = true;
+bool TrackModifiedColumns = false;
+
+
+static Regex rxCleanUp = new Regex(@"[^\w\d_]", RegexOptions.Compiled);
+
+static Func<string, string> CleanUp = (str) =>
+{
+	str = rxCleanUp.Replace(str, "_");
+	if (char.IsDigit(str[0])) str = "_" + str;
+	
+    return str;
+};
+
+
+
+string GetConnectionString(ref string connectionStringName, out string providerName)
+{
+    var _CurrentProject = GetCurrentProject();
+
+	providerName=null;
+    
+    string result="";
+    ExeConfigurationFileMap configFile = new ExeConfigurationFileMap();
+    configFile.ExeConfigFilename = GetConfigPath();
+
+    if (string.IsNullOrEmpty(configFile.ExeConfigFilename))
+        throw new ArgumentNullException("The project does not contain App.config or Web.config file.");
+    
+    
+    var config = System.Configuration.ConfigurationManager.OpenMappedExeConfiguration(configFile, ConfigurationUserLevel.None);
+    var connSection=config.ConnectionStrings;
+
+    //if the connectionString is empty - which is the defauls
+    //look for count-1 - this is the last connection string
+    //and takes into account AppServices and LocalSqlServer
+    if(string.IsNullOrEmpty(connectionStringName))
+    {
+        if(connSection.ConnectionStrings.Count>1)
+        {
+			connectionStringName = connSection.ConnectionStrings[connSection.ConnectionStrings.Count-1].Name;
+            result=connSection.ConnectionStrings[connSection.ConnectionStrings.Count-1].ConnectionString;
+            providerName=connSection.ConnectionStrings[connSection.ConnectionStrings.Count-1].ProviderName;
+        }            
+    }
+    else
+    {
+        try
+        {
+            result=connSection.ConnectionStrings[connectionStringName].ConnectionString;
+            providerName=connSection.ConnectionStrings[connectionStringName].ProviderName;
+        }
+        catch
+        {
+            result="There is no connection string name called '"+connectionStringName+"'";
+        }
+    }
+
+//	if (String.IsNullOrEmpty(providerName))
+//		providerName="System.Data.SqlClient";
+    
+    return result;
+}
+
+string _connectionString="";
+string _providerName="";
+
+void InitConnectionString()
+{
+    if(String.IsNullOrEmpty(_connectionString))
+    {
+        _connectionString=GetConnectionString(ref ConnectionStringName, out _providerName);
+
+		if(_connectionString.Contains("|DataDirectory|"))
+		{
+			//have to replace it
+			string dataFilePath=GetDataDirectory();
+			_connectionString=_connectionString.Replace("|DataDirectory|",dataFilePath);
+		}    
+	}
+}
+
+public string ConnectionString
+{
+    get 
+    {
+		InitConnectionString();
+        return _connectionString;
+    }
+}
+
+public string ProviderName
+{
+    get 
+    {
+		InitConnectionString();
+        return _providerName;
+    }
+}
+
+public EnvDTE.Project GetCurrentProject()  {
+
+    IServiceProvider _ServiceProvider = (IServiceProvider)Host;
+    if (_ServiceProvider == null)
+        throw new Exception("Host property returned unexpected value (null)");
+	
+    EnvDTE.DTE dte = (EnvDTE.DTE)_ServiceProvider.GetService(typeof(EnvDTE.DTE));
+    if (dte == null)
+        throw new Exception("Unable to retrieve EnvDTE.DTE");
+	
+    Array activeSolutionProjects = (Array)dte.ActiveSolutionProjects;
+    if (activeSolutionProjects == null)
+        throw new Exception("DTE.ActiveSolutionProjects returned null");
+	
+    EnvDTE.Project dteProject = (EnvDTE.Project)activeSolutionProjects.GetValue(0);
+    if (dteProject == null)
+        throw new Exception("DTE.ActiveSolutionProjects[0] returned null");
+	
+    return dteProject;
+
+}
+
+private string GetProjectPath()
+{
+    EnvDTE.Project project = GetCurrentProject();
+    System.IO.FileInfo info = new System.IO.FileInfo(project.FullName);
+    return info.Directory.FullName;
+}
+
+private string GetConfigPath()
+{
+    EnvDTE.Project project = GetCurrentProject();
+    foreach (EnvDTE.ProjectItem item in project.ProjectItems)
+    {
+        // if it is the app.config file, then open it up
+        if (item.Name.Equals("App.config",StringComparison.InvariantCultureIgnoreCase) || item.Name.Equals("Web.config",StringComparison.InvariantCultureIgnoreCase))
+			return GetProjectPath() + "\\" + item.Name;
+    }
+    return String.Empty;
+}
+
+public string GetDataDirectory()
+{
+    EnvDTE.Project project=GetCurrentProject();
+    return System.IO.Path.GetDirectoryName(project.FileName)+"\\App_Data\\";
+}
+
+static string zap_password(string connectionString)
+{
+	var rx = new Regex("password=.*;", RegexOptions.Singleline | RegexOptions.Multiline | RegexOptions.IgnoreCase);
+	return rx.Replace(connectionString, "password=**zapped**;");
+}
+
+//得到列说明
+string getColumnSummery(string tablename,string columnname)
+{
+	InitConnectionString();
+	DbProviderFactory _factory;
+	
+   _factory = DbProviderFactories.GetFactory(ProviderName);
+	
+	using(var conn=_factory.CreateConnection())
+	{
+		conn.ConnectionString=ConnectionString;         
+		conn.Open();
+        
+			
+		//string sql=@"SELECT TOP 1 ex.value FROM sys.columns c LEFT OUTER JOIN sys.extended_properties ex ON ex.major_id = c.object_id AND ex.minor_id = c.column_id AND ex.name = 'MS_Description' left outer join systypes t on c.system_type_id=t.xtype WHERE OBJECTPROPERTY(c.object_id, 'IsMsShipped')=0 ";
+	    string sql=@"SELECT TOP 1 ex.value FROM sys.columns c LEFT OUTER JOIN sys.extended_properties ex ON ex.major_id = c.object_id AND ex.minor_id = c.column_id AND ex.name = 'MS_Description' left outer join systypes t on c.system_type_id=t.xtype WHERE OBJECTPROPERTY(c.object_id, 'IsMsShipped')=0 AND OBJECT_NAME(c.object_id)=@tablename AND c.name=@columname ";
+		
+		using (var cmd=_factory.CreateCommand())
+		{
+			cmd.Connection=conn;
+			cmd.CommandText=sql;
+
+			var p = cmd.CreateParameter();
+			p.ParameterName = "@tablename";
+			p.Value=tablename;
+			cmd.Parameters.Add(p);
+
+			 p = cmd.CreateParameter();
+			p.ParameterName = "@columname";
+			p.Value=columnname;
+			cmd.Parameters.Add(p);
+
+			var result=cmd.ExecuteScalar();
+
+			conn.Close();
+
+			if(result!=null)
+				return result.ToString();    
+			else
+				return ProviderName;
+		}	    
+          
+		return "";
+	
+	}
+	     
+}
+
+
+
+
+//得到表说明备注
+string getTableSummery(string tablename)
+{
+	InitConnectionString();
+	DbProviderFactory _factory;
+	
+   _factory = DbProviderFactories.GetFactory(ProviderName);
+	
+	using(var conn=_factory.CreateConnection())
+	{
+		conn.ConnectionString=ConnectionString;         
+		conn.Open();
+        
+			
+		//string sql=@"SELECT TOP 1 ex.value FROM sys.columns c LEFT OUTER JOIN sys.extended_properties ex ON ex.major_id = c.object_id AND ex.minor_id = c.column_id AND ex.name = 'MS_Description' left outer join systypes t on c.system_type_id=t.xtype WHERE OBJECTPROPERTY(c.object_id, 'IsMsShipped')=0 ";
+	    string sql=@"SELECT TOP 1 TableSumary FROM (select c.Name AS TableName,isnull(f.[value],'') AS TableSumary from  sys.columns a left join sys.types b on a.user_type_id=b.user_type_id inner join  sys.objects c on a.object_id=c.object_id and c.Type='U' left join  syscomments d on a.default_object_id=d.ID left join sys.extended_properties e on e.major_id=c.object_id and e.minor_id=a.Column_id and e.class=1 left join  sys.extended_properties f on f.major_id=c.object_id and f.minor_id=0 and f.class=1) AS Mytb WHERE TableName=@tablename ";
+		
+		using (var cmd=_factory.CreateCommand())
+		{
+			cmd.Connection=conn;
+			cmd.CommandText=sql;
+
+			var p = cmd.CreateParameter();
+			p.ParameterName = "@tablename";
+			p.Value=tablename;
+			cmd.Parameters.Add(p);
+
+			var result=cmd.ExecuteScalar();
+
+			conn.Close();
+
+			if(result!=null)
+				return result.ToString();    
+			else
+				return ProviderName;
+		}	    
+          
+		return "";
+	
+	}
+	     
+}
+ 
+    //修改为每次获取表全部字段注释
+DataTable getColumnSummeryData(string tablename)
+{	 
+		string sql = @"SELECT ex.VALUE FROM sys.columns c LEFT JOIN sys.extended_properties ex ON ex.major_id = c.object_id AND ex.minor_id = c.column_id AND ex.name = 'MS_Description' LEFT JOIN systypes t ON c.system_type_id = t.xtype WHERE OBJECTPROPERTY(c.object_id, 'IsMsShipped') = 0 AND OBJECT_NAME(c.object_id) = '"+tablename+"'";
+    
+		using (var conn =new SqlConnection(this.ConnectionString))
+		{	    
+		     SqlDataAdapter adapter = new SqlDataAdapter(sql, conn);   
+			 DataSet ds = new DataSet();  
+			 adapter.Fill(ds);   
+
+			conn.Close();
+
+			return ds.Tables[0];	  
+		}	 
+   
+}
+
+List<string> getColumnSummeryList(string connStr,string tablename)
+{
+		   var list = new List<string>();
+           this.ConnectionStringName = connStr; 
+			var dt =  getColumnSummeryData(tablename);
+		     foreach (System.Data.DataRow row in dt.Rows)
+            {
+                     list.Add(row[0].ToString());
+            }
+
+		   return list;
+}
+
+	//table name formatter
+	public static  string TableNameFormatter(string tableName)
+	{
+		return tableName.Split('_')[1];
+	}
+ 
+#>

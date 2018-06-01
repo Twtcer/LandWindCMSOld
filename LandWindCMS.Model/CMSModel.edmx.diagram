@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<edmx:Edmx Version="3.0" xmlns:edmx="http://schemas.microsoft.com/ado/2009/11/edmx">
+ <!-- EF Designer content (DO NOT EDIT MANUALLY BELOW HERE) -->
+  <edmx:Designer xmlns="http://schemas.microsoft.com/ado/2009/11/edmx">
+    <!-- Diagram content (shape and connector positions) -->
+    <edmx:Diagrams>
+      <Diagram DiagramId="7f919dcd32f74aa187c04009d8ff420e" Name="Diagram1">
+        <EntityTypeShape EntityType="LandWindCMSModel.Base_Resource" Width="1.5" PointX="0.75" PointY="0.75" IsExpanded="true" />
+        <EntityTypeShape EntityType="LandWindCMSModel.Base_Role" Width="1.5" PointX="2.75" PointY="0.75" IsExpanded="true" />
+        <EntityTypeShape EntityType="LandWindCMSModel.Base_RoleResource" Width="1.5" PointX="2.75" PointY="3.75" IsExpanded="true" />
+        <EntityTypeShape EntityType="LandWindCMSModel.Base_User" Width="1.5" PointX="4.625" PointY="0.875" IsExpanded="true" FillColor="0, 122, 204" />
+        <EntityTypeShape EntityType="LandWindCMSModel.Base_UserResource" Width="1.5" PointX="6.5" PointY="0.75" />
+      </Diagram>
+    </edmx:Diagrams>
+  </edmx:Designer>
+</edmx:Edmx>
